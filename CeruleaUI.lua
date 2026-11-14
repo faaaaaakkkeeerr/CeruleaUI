@@ -1,5 +1,5 @@
 --[[
-    CeruleaUI 1.0.0
+    CeruleaUI 1.0.1
     A small UI library for Roblox executors: window, tabs, cards, toggles, fields, sliders,
     keybinds, tables, charts, notifications, EN/RU (any language) switching and config files.
 
@@ -16,7 +16,7 @@ local TweenService     = game:GetService("TweenService")
 local HttpService      = game:GetService("HttpService")
 local player           = Players.LocalPlayer
 
-local UI = { Version = "1.0.0" }
+local UI = { Version = "1.0.1" }
 
 --==================== Theme ====================
 UI.Theme = {
@@ -997,7 +997,7 @@ function Tab:AddItemList(o)
         Position = UDim2.fromOffset(0, 30), Size = UDim2.new(1, 0, 1, -30), BackgroundTransparency = 1, BorderSizePixel = 0,
         ScrollBarThickness = 3, ScrollBarImageColor3 = C.mono, CanvasSize = UDim2.fromOffset(0, #o.items * rowH), Parent = box,
     })
-    local infos = {}
+    local infos, paints, boxes = {}, {}, {}
     for i, item in ipairs(o.items) do
         local r = frame(scroll, { Size = UDim2.new(1, 0, 0, rowH), Position = UDim2.fromOffset(0, (i - 1) * rowH), BackgroundTransparency = 1 })
         if i > 1 then line(r, 0) end
@@ -1013,6 +1013,7 @@ function Tab:AddItemList(o)
             tick.Visible = on
         end
         paint()
+        paints[item] = paint
         cb.MouseButton1Click:Connect(function()
             o.setEnabled(item, not o.enabled(item))
             paint()
@@ -1033,6 +1034,7 @@ function Tab:AddItemList(o)
             })
             corner(boxF, 6)
             stroke(boxF, 0.92)
+            boxes[item] = boxF
             boxF.FocusLost:Connect(function()
                 local v = tonumber(boxF.Text)
                 if v then o.setValue(item, math.max(0, math.floor(v))) end
@@ -1042,7 +1044,13 @@ function Tab:AddItemList(o)
     end
     local obj = {}
     function obj:Refresh()
-        for item, l in pairs(infos) do l.Text = tostring(o.info(item)) end
+        if o.info then
+            for item, l in pairs(infos) do l.Text = tostring(o.info(item)) end
+        end
+        for _, paint in pairs(paints) do paint() end
+        if o.value then
+            for item, b in pairs(boxes) do b.Text = tostring(o.value(item)) end
+        end
     end
     return obj
 end
