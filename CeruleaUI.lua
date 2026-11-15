@@ -1,5 +1,5 @@
 --[[
-    CeruleaUI 1.0.1
+    CeruleaUI 1.2.0
     A small UI library for Roblox executors: window, tabs, cards, toggles, fields, sliders,
     keybinds, tables, charts, notifications, EN/RU (any language) switching and config files.
 
@@ -16,7 +16,7 @@ local TweenService     = game:GetService("TweenService")
 local HttpService      = game:GetService("HttpService")
 local player           = Players.LocalPlayer
 
-local UI = { Version = "1.0.1" }
+local UI = { Version = "1.2.0" }
 
 --==================== Theme ====================
 UI.Theme = {
@@ -84,7 +84,95 @@ local function trySerif(lbl)
     end)
 end
 
+-- base64 (own implementation, executors differ in what they provide)
+local B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+local function b64enc(data)
+    local out = {}
+    for i = 1, #data, 3 do
+        local a, b, c = data:byte(i, i + 2)
+        local n = a * 65536 + (b or 0) * 256 + (c or 0)
+        local c1, c2, c3, c4 = math.floor(n / 262144) % 64, math.floor(n / 4096) % 64, math.floor(n / 64) % 64, n % 64
+        out[#out + 1] = B64:sub(c1 + 1, c1 + 1) .. B64:sub(c2 + 1, c2 + 1)
+            .. (b and B64:sub(c3 + 1, c3 + 1) or "=") .. (c and B64:sub(c4 + 1, c4 + 1) or "=")
+    end
+    return table.concat(out)
+end
+local B64R = {}
+for i = 1, #B64 do B64R[B64:sub(i, i)] = i - 1 end
+local function b64dec(str)
+    str = str:gsub("[^%w%+/=]", "")
+    local out = {}
+    for i = 1, #str, 4 do
+        local c1, c2, c3, c4 = str:sub(i, i), str:sub(i + 1, i + 1), str:sub(i + 2, i + 2), str:sub(i + 3, i + 3)
+        local v1, v2 = B64R[c1], B64R[c2]
+        if not v1 or not v2 then return nil end
+        local v3, v4 = B64R[c3] or 0, B64R[c4] or 0
+        local n = v1 * 262144 + v2 * 4096 + v3 * 64 + v4
+        local b1, b2, b3 = math.floor(n / 65536) % 256, math.floor(n / 256) % 256, n % 256
+        out[#out + 1] = string.char(b1)
+        if c3 ~= "=" and c3 ~= "" then out[#out + 1] = string.char(b2) end
+        if c4 ~= "=" and c4 ~= "" then out[#out + 1] = string.char(b3) end
+    end
+    return table.concat(out)
+end
+function UI.SanitizeName(n)
+    n = tostring(n or ""):gsub("[%c/\\:%*%?\"<>|%.]", ""):gsub("^%s+", ""):gsub("%s+$", "")
+    return n:sub(1, 40)
+end
+
 UI.Util = { new = new, corner = corner, stroke = stroke, frame = frame, label = label, line = line, tween = tween, Theme = C, Fonts = F }
+
+-- Icons: a text glyph, an rbxasset id, or a PNG url. A url is downloaded once into <Folder>/icons and shown
+-- through getcustomasset; the glyph stays visible until (and if) the image is ready.
+local function resolveFile(win, src, sub)
+    if src:find("^rbxasset") then return src end
+    if not (getcustomasset and writefile and isfile and readfile) then return nil end
+    local name = src:match("([^/]+)$") or "file.bin"
+    local dir = win.Folder .. "/" .. sub
+    pcall(function()
+        if makefolder then
+            if not (isfolder and isfolder(win.Folder)) then makefolder(win.Folder) end
+            if not (isfolder and isfolder(dir)) then makefolder(dir) end
+        end
+    end)
+    local path = dir .. "/" .. name
+    if not isfile(path) then
+        local ok, data = pcall(function() return game:HttpGet(src) end)
+        if not ok or type(data) ~= "string" or #data < 100 then return nil end
+        if not pcall(writefile, path, data) then return nil end
+    end
+    local ok, asset = pcall(getcustomasset, path)
+    return ok and asset or nil
+end
+local function resolveImage(win, src) return resolveFile(win, src, "icons") end
+-- returns { Paint(color) }
+local function makeIcon(win, parent, src, glyph, size, pos, color, fontSize)
+    local box = frame(parent, { Size = UDim2.fromOffset(size.X, size.Y), Position = pos, BackgroundTransparency = 1 })
+    local txt = label(box, { Text = glyph or "•", Font = F.Icon, TextSize = fontSize or 17, TextColor3 = color, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.fromScale(1, 1) })
+    local obj = { Text = txt, Color = color }
+    function obj:Paint(col)
+        self.Color = col
+        txt.TextColor3 = col
+        if self.Image then self.Image.ImageColor3 = col end
+    end
+    if type(src) == "string" and (src:find("^https?://") or src:find("^rbxasset")) then
+        task.spawn(function()
+            local asset = resolveImage(win, src)
+            if asset and box.Parent then
+                local px = math.floor(math.min(size.X, size.Y) * 0.82)
+                obj.Image = new("ImageLabel", {
+                    BackgroundTransparency = 1, Image = asset, ImageColor3 = obj.Color, AnchorPoint = Vector2.new(0.5, 0.5),
+                    Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(px, px), Parent = box,
+                })
+                txt.Visible = false
+            end
+        end)
+    elseif type(src) == "string" and src ~= "" then
+        txt.Text = src
+    end
+    return obj
+end
+UI.Util.makeIcon = makeIcon
 
 --==================== Window ====================
 local Window = {}
@@ -134,6 +222,7 @@ function Window:SetLanguage(code)
     self.Language = code
     self:Refresh()
     for _, c in ipairs(self._langControls) do c:Set(code, true) end
+    self:SetPref("Language", code)
     if self._onLanguage then task.spawn(self._onLanguage, code) end
 end
 
@@ -154,8 +243,8 @@ local function segmented(win, parent, items, bw, h, fs, default, onPick)
     local function paint()
         for code, b in pairs(btns) do
             local on = (value == code)
-            b.BackgroundColor3 = C.acc
-            b.BackgroundTransparency = on and 0.78 or 1
+            b.BackgroundColor3 = C.line
+            b.BackgroundTransparency = on and 0.9 or 1
             b.TextColor3 = on and C.text or C.nav
         end
     end
@@ -169,6 +258,7 @@ local function segmented(win, parent, items, bw, h, fs, default, onPick)
         if it.text then b.Text = it.text else win:Bind(b, it.key) end
         btns[it.code] = b
         b.MouseButton1Click:Connect(function()
+            win:PlaySound("click")
             value = it.code
             paint()
             if onPick then onPick(it.code) end
@@ -198,13 +288,34 @@ function UI.new(opts)
     local sideW = opts.SidebarWidth or 158
     local topH = 40
 
+    local folder = opts.Folder or name
+    local prefs = {}
+    if opts.Prefs ~= false and readfile and isfile then
+        pcall(function()
+            local path = folder .. "/_prefs.json"
+            if isfile(path) then
+                local d = HttpService:JSONDecode(readfile(path))
+                if type(d) == "table" then prefs = d end
+            end
+        end)
+    end
+    -- saved accent colour is applied before anything is built
+    if type(prefs.Accent) == "table" and #prefs.Accent == 3 then
+        local ok, col = pcall(function() return Color3.fromRGB(prefs.Accent[1], prefs.Accent[2], prefs.Accent[3]) end)
+        if ok then
+            C.acc = col
+            C.accT = col:Lerp(Color3.new(1, 1, 1), 0.28)
+        end
+    end
+
     local self = setmetatable({
-        Name = name, Flags = {}, Languages = opts.Languages or { "en" }, Translations = {},
+        Prefs = prefs, Name = name, Flags = {}, Languages = opts.Languages or { "en" }, Translations = {},
         LanguageNames = opts.LanguageNames or {}, Tabs = {}, ToggleKey = opts.ToggleKey or Enum.KeyCode.RightShift,
-        Folder = opts.Folder or name, _bound = {}, _setters = {}, _conns = {}, _cleanup = {}, _keybinds = {},
-        _langControls = {}, _nav = {}, _order = 0, _lastSection = nil, _onLanguage = opts.OnLanguage,
+        Folder = folder, SoundsUrl = opts.SoundsUrl, SoundsOn = opts.SoundsUrl ~= nil, SoundVolume = 0.5, _sounds = {}, Private = {}, _overlays = {}, _bound = {}, _setters = {}, _conns = {}, _cleanup = {}, _keybinds = {},
+        _langControls = {}, _nav = {}, _order = 0, _lastSection = nil, _onLanguage = opts.OnLanguage, _onAccent = opts.OnAccent,
     }, Window)
     self.Language = opts.Language or self.Languages[1]
+    if type(prefs.Language) == "string" and table.find(self.Languages, prefs.Language) then self.Language = prefs.Language end
     env.__CeruleaWindows[name] = self
 
     local gui = new("ScreenGui", { Name = name, ResetOnSpawn = false, ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = opts.DisplayOrder or 50 })
@@ -225,7 +336,13 @@ function UI.new(opts)
     if cam then
         local vp = cam.ViewportSize
         scale.Scale = math.clamp(math.min(vp.X / (size.X + 52), vp.Y / (size.Y + 52)), 0.5, 1)
+        local px, py = tonumber(prefs.PosX), tonumber(prefs.PosY)
+        if px and py then
+            local lx, ly = vp.X / scale.Scale / 2 - 120, vp.Y / scale.Scale / 2 - 60
+            win.Position = UDim2.new(0.5, math.clamp(px, -lx, lx), 0.5, math.clamp(py, -ly, ly))
+        end
     end
+    self._scale = scale
 
     -- Top bar
     local top = frame(win, { Size = UDim2.new(1, 0, 0, topH), BackgroundTransparency = 1 })
@@ -258,7 +375,13 @@ function UI.new(opts)
             end
         end)
         self:Connect(UserInputService.InputEnded, function(i)
-            if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then dragging = false end
+            if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+                if dragging then
+                    self:SetPref("PosX", win.Position.X.Offset)
+                    self:SetPref("PosY", win.Position.Y.Offset)
+                end
+                dragging = false
+            end
         end)
     end
 
@@ -354,13 +477,43 @@ function Window:CreateOverlay(name, order)
         g.Parent = player:WaitForChild("PlayerGui")
     end
     local root = frame(g, { Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(0, 0, 0) })
+    table.insert(self._overlays, g)
     self:AddCleanup(function() g:Destroy() end)
     return g, root
+end
+
+--==================== Sounds ====================
+-- opts.SoundsUrl = "https://.../sounds/" with <name>.ogg files. Files are downloaded once and played lazily.
+local SOUND_VOLUME = { click = 0.8, hover = 0.35, tab = 0.7, on = 0.8, off = 0.7, success = 0.8, error = 0.8, notify = 0.7 }
+function Window:PlaySound(name)
+    if not self.SoundsOn or not self.SoundsUrl then return end
+    local s = self._sounds[name]
+    if s == false then return end
+    if s == nil then
+        self._sounds[name] = false
+        task.spawn(function()
+            local asset = resolveFile(self, self.SoundsUrl .. name .. ".ogg", "sounds")
+            if not asset or not self.Gui.Parent then return end
+            local snd = new("Sound", { SoundId = asset, Parent = self.Gui })
+            self._sounds[name] = snd
+            snd.Volume = (SOUND_VOLUME[name] or 0.7) * self.SoundVolume
+            snd:Play()
+        end)
+        return
+    end
+    s.Volume = (SOUND_VOLUME[name] or 0.7) * self.SoundVolume
+    s.TimePosition = 0
+    s:Play()
+end
+function Window:SetSounds(on, volume)
+    if on ~= nil then self.SoundsOn = on and true or false end
+    if volume then self.SoundVolume = math.clamp(tonumber(volume) or 0.5, 0, 1) end
 end
 
 --==================== Notifications ====================
 function Window:Notify(text, seconds, kind)
     local accent = (kind == "error") and C.red or (kind == "success") and C.green or C.accT
+    self:PlaySound(kind == "error" and "error" or kind == "success" and "success" or "notify")
     local t = frame(self._toasts, { Size = UDim2.new(1, 0, 0, 38), BackgroundColor3 = C.card, BackgroundTransparency = 1, LayoutOrder = math.floor(os.clock() * 1000) })
     corner(t, 9)
     local st = stroke(t, 1)
@@ -382,11 +535,69 @@ function Window:Notify(text, seconds, kind)
     end)
 end
 
---==================== Config files ====================
+--==================== Preferences (language, position, accent, last config) ====================
 local function hasFiles() return writefile and readfile and isfile end
-function Window:ExportFlags()
+local function ensureFolder(folder)
+    pcall(function() if makefolder and not (isfolder and isfolder(folder)) then makefolder(folder) end end)
+end
+function Window:GetPref(key, default)
+    local v = self.Prefs[key]
+    if v == nil then return default end
+    return v
+end
+function Window:SetPref(key, value)
+    self.Prefs[key] = value
+    if not hasFiles() or self._prefSaving then return end
+    self._prefSaving = true
+    task.delay(0.6, function()
+        self._prefSaving = false
+        ensureFolder(self.Folder)
+        pcall(function() writefile(self.Folder .. "/_prefs.json", HttpService:JSONEncode(self.Prefs)) end)
+    end)
+end
+
+-- Recolour the whole interface (and overlays) with a new accent colour.
+function Window:SetAccent(color)
+    local oldA, oldT = C.acc, C.accT
+    local newA = color
+    local newT = color:Lerp(Color3.new(1, 1, 1), 0.28)
+    C.acc, C.accT = newA, newT
+    local function same(a, b) return a == b end
+    local function fix(o)
+        pcall(function()
+            if o:IsA("GuiObject") then
+                if same(o.BackgroundColor3, oldA) then o.BackgroundColor3 = newA elseif same(o.BackgroundColor3, oldT) then o.BackgroundColor3 = newT end
+            end
+            if o:IsA("TextLabel") or o:IsA("TextButton") or o:IsA("TextBox") then
+                if same(o.TextColor3, oldA) then o.TextColor3 = newA elseif same(o.TextColor3, oldT) then o.TextColor3 = newT end
+            end
+            if o:IsA("ImageLabel") or o:IsA("ImageButton") then
+                if same(o.ImageColor3, oldA) then o.ImageColor3 = newA elseif same(o.ImageColor3, oldT) then o.ImageColor3 = newT end
+            end
+            if o:IsA("UIStroke") then
+                if same(o.Color, oldA) then o.Color = newA elseif same(o.Color, oldT) then o.Color = newT end
+            end
+            if o:IsA("ScrollingFrame") then
+                if same(o.ScrollBarImageColor3, oldA) then o.ScrollBarImageColor3 = newA elseif same(o.ScrollBarImageColor3, oldT) then o.ScrollBarImageColor3 = newT end
+            end
+        end)
+    end
+    local roots = { self.Gui }
+    for _, g in ipairs(self._overlays) do table.insert(roots, g) end
+    for _, r in ipairs(roots) do
+        fix(r)
+        for _, d in ipairs(r:GetDescendants()) do fix(d) end
+    end
+    self:SetPref("Accent", { math.floor(newA.R * 255 + 0.5), math.floor(newA.G * 255 + 0.5), math.floor(newA.B * 255 + 0.5) })
+    if self._onAccent then task.spawn(self._onAccent, newA, newT) end
+end
+
+--==================== Config files ====================
+-- win.Private = { FlagName = true } keeps secrets (webhook URLs, keys) out of shared config strings
+function Window:ExportFlags(forShare)
     local data = {}
     for k, v in pairs(self.Flags) do
+        if forShare and self.Private[k] then continue end
         local tv = typeof(v)
         if tv == "EnumItem" then data[k] = v.Name
         elseif tv == "boolean" or tv == "number" or tv == "string" then data[k] = v end
@@ -402,19 +613,50 @@ function Window:ImportFlags(json)
     end
     return true
 end
+function Window:_path(name) return self.Folder .. "/" .. UI.SanitizeName(name) .. ".json" end
 function Window:SaveConfig(name)
     if not hasFiles() then return false, "executor has no file functions" end
-    pcall(function() if makefolder and not (isfolder and isfolder(self.Folder)) then makefolder(self.Folder) end end)
-    local ok, err = pcall(writefile, self.Folder .. "/" .. name .. ".json", self:ExportFlags())
+    name = UI.SanitizeName(name)
+    if name == "" then return false, "empty name" end
+    ensureFolder(self.Folder)
+    local ok, err = pcall(writefile, self:_path(name), self:ExportFlags())
+    if ok then self:SetPref("LastConfig", name) end
     return ok, err
 end
 function Window:LoadConfig(name)
     if not hasFiles() then return false, "executor has no file functions" end
-    local path = self.Folder .. "/" .. name .. ".json"
+    name = UI.SanitizeName(name)
+    local path = self:_path(name)
     if not isfile(path) then return false, "no such config" end
     local ok, content = pcall(readfile, path)
     if not ok then return false, content end
-    return self:ImportFlags(content)
+    local done = self:ImportFlags(content)
+    if done then self:SetPref("LastConfig", name) end
+    return done
+end
+function Window:DeleteConfig(name)
+    if not (delfile and isfile) then return false, "executor has no delfile" end
+    name = UI.SanitizeName(name)
+    local path = self:_path(name)
+    if not isfile(path) then return false, "no such config" end
+    local ok, err = pcall(delfile, path)
+    if ok and self.Prefs.LastConfig == name then self:SetPref("LastConfig", nil) end
+    return ok, err
+end
+function Window:RenameConfig(old, new)
+    if not hasFiles() or not delfile then return false, "executor has no file functions" end
+    old, new = UI.SanitizeName(old), UI.SanitizeName(new)
+    if new == "" then return false, "empty name" end
+    if old == new then return true end
+    if not isfile(self:_path(old)) then return false, "no such config" end
+    if isfile(self:_path(new)) then return false, "name already used" end
+    local ok, content = pcall(readfile, self:_path(old))
+    if not ok then return false, content end
+    local ok2, err = pcall(writefile, self:_path(new), content)
+    if not ok2 then return false, err end
+    pcall(delfile, self:_path(old))
+    if self.Prefs.LastConfig == old then self:SetPref("LastConfig", new) end
+    return true
 end
 function Window:ListConfigs()
     local names = {}
@@ -423,12 +665,35 @@ function Window:ListConfigs()
         if ok then
             for _, f in ipairs(files) do
                 local n = tostring(f):match("([^/\\]+)%.json$")
-                if n then table.insert(names, n) end
+                if n and n:sub(1, 1) ~= "_" then table.insert(names, n) end
             end
         end
     end
     table.sort(names)
     return names
+end
+-- Share a config as one line of text: "CRL1:<base64 of json>"
+function Window:ExportString()
+    return "CRL1:" .. b64enc(self:ExportFlags(true))
+end
+function Window:ImportString(str)
+    str = tostring(str or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    local json
+    if str:sub(1, 1) == "{" then
+        json = str
+    else
+        json = b64dec((str:gsub("^CRL1:", "")))
+    end
+    if not json or json == "" then return false, "bad string" end
+    if not self:ImportFlags(json) then return false, "bad string" end
+    return true
+end
+-- Which config to load on start: env.CeruleaConfig (set by the user script) or the last used one.
+function Window:AutoLoadConfig(override)
+    local name = override
+    if not name and self:GetPref("AutoLoad", true) then name = self.Prefs.LastConfig end
+    if name and name ~= "" and self:LoadConfig(name) then return name end
+    return nil
 end
 
 --==================== Tabs ====================
@@ -441,8 +706,8 @@ function Window:SelectTab(id)
     for k, tab in pairs(self.Tabs) do tab.Page.Visible = (k == id) end
     for k, n in pairs(self._nav) do
         local on = (k == id)
-        tween(n.bg, { BackgroundTransparency = on and 0.86 or 1 })
-        tween(n.icon, { TextColor3 = on and C.accT or C.sub })
+        tween(n.bg, { BackgroundTransparency = on and 0.93 or 1 })
+        n.icon:Paint(on and C.text or C.sub)
         tween(n.txt, { TextColor3 = on and C.text or C.nav })
     end
 end
@@ -458,13 +723,13 @@ function Window:AddTab(o)
         self:Bind(l, o.section)
     end
 
-    local item = frame(self._side, { Size = UDim2.new(1, 0, 0, 32), BackgroundColor3 = C.acc, BackgroundTransparency = 1, LayoutOrder = self:_next() })
+    local item = frame(self._side, { Size = UDim2.new(1, 0, 0, 32), BackgroundColor3 = C.line, BackgroundTransparency = 1, LayoutOrder = self:_next() })
     corner(item, 8)
-    local ic = label(item, { Text = o.icon or "•", Font = F.Icon, TextSize = 17, TextColor3 = C.sub, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(6, 0), Size = UDim2.fromOffset(22, 32) })
+    local ic = makeIcon(self, item, o.icon, o.glyph, Vector2.new(22, 32), UDim2.fromOffset(6, 0), C.sub)
     local txt = label(item, { Font = F.Sans, TextSize = 13, TextColor3 = C.nav, Position = UDim2.fromOffset(34, 0), Size = UDim2.new(1, -40, 1, 0) })
     self:Bind(txt, o.title or id)
     local btn = new("TextButton", { Text = "", BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), Parent = item })
-    btn.MouseButton1Click:Connect(function() self:SelectTab(id) end)
+    btn.MouseButton1Click:Connect(function() self:PlaySound("tab") self:SelectTab(id) end)
     self._nav[id] = { bg = item, icon = ic, txt = txt }
 
     local page = new("ScrollingFrame", {
@@ -604,9 +869,9 @@ function UI._button(win, parent, o, size, pos)
     if not o.primary then stroke(b, 0.91) end
     win:Bind(b, o.text)
     local base = b.BackgroundColor3
-    b.MouseEnter:Connect(function() tween(b, { BackgroundColor3 = o.primary and C.accT or C.buttonHover }) end)
+    b.MouseEnter:Connect(function() tween(b, { BackgroundColor3 = o.primary and C.accT or C.buttonHover }) win:PlaySound("hover") end)
     b.MouseLeave:Connect(function() tween(b, { BackgroundColor3 = base }) end)
-    b.MouseButton1Click:Connect(function() if o.callback then task.spawn(o.callback) end end)
+    b.MouseButton1Click:Connect(function() win:PlaySound("click") if o.callback then task.spawn(o.callback) end end)
     return b
 end
 
@@ -640,7 +905,7 @@ function Card:AddToggle(o)
     function obj:Get() return state end
     paint(false)
     win:_flag(o.flag, state, function(v) obj:Set(v) end)
-    track.MouseButton1Click:Connect(function() obj:Set(not state) end)
+    track.MouseButton1Click:Connect(function() obj:Set(not state) win:PlaySound(state and "on" or "off") end)
     return obj
 end
 
@@ -887,15 +1152,18 @@ function Tab:AddStats(list)
     local out = {}
     for _, s in ipairs(list) do
         local size, i = nextSize()
-        local c = frame(row, { Size = UDim2.new(size.X.Scale, size.X.Offset, 0, 92), BackgroundColor3 = C.card, LayoutOrder = i })
+        local c = frame(row, { Size = UDim2.new(size.X.Scale, size.X.Offset, 0, 108), BackgroundColor3 = C.card, LayoutOrder = i })
         corner(c, 12)
         stroke(c, 0.93)
         if s.index then label(c, { Text = s.index, Font = F.Mono, TextSize = 11, TextColor3 = C.mono, TextXAlignment = Enum.TextXAlignment.Right, Position = UDim2.new(1, -54, 0, 10), Size = UDim2.fromOffset(40, 16) }) end
-        label(c, { Text = s.icon or "", Font = F.Icon, TextSize = 17, TextColor3 = C.accT, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(12, 10), Size = UDim2.fromOffset(20, 20) })
-        local t = label(c, { Font = F.Bold, TextSize = 12, Position = UDim2.fromOffset(36, 10), Size = UDim2.new(1, -80, 0, 20), TextTruncate = Enum.TextTruncate.AtEnd })
+        local ibox = frame(c, { Size = UDim2.fromOffset(34, 34), Position = UDim2.fromOffset(12, 12), BackgroundColor3 = C.field })
+        corner(ibox, 9)
+        stroke(ibox, 0.92)
+        makeIcon(win, ibox, s.icon, s.glyph, Vector2.new(34, 34), UDim2.new(), C.nav)
+        local t = label(c, { Font = F.Bold, TextSize = 13, Position = UDim2.fromOffset(56, 12), Size = UDim2.new(1, -110, 0, 34), TextTruncate = Enum.TextTruncate.AtEnd })
         win:Bind(t, s.title)
-        local v = label(c, { Text = tostring(s.value or 0), Font = F.Bold, TextSize = 28, Position = UDim2.fromOffset(14, 32), Size = UDim2.new(1, -28, 0, 34) })
-        local sub = label(c, { Font = F.Mono, TextSize = 10, TextColor3 = C.mono, Position = UDim2.fromOffset(14, 68), Size = UDim2.new(1, -28, 0, 16), TextTruncate = Enum.TextTruncate.AtEnd })
+        local v = label(c, { Text = tostring(s.value or 0), Font = F.Bold, TextSize = 28, Position = UDim2.fromOffset(14, 54), Size = UDim2.new(1, -28, 0, 34) })
+        local sub = label(c, { Font = F.Mono, TextSize = 10, TextColor3 = C.mono, Position = UDim2.fromOffset(14, 88), Size = UDim2.new(1, -28, 0, 16), TextTruncate = Enum.TextTruncate.AtEnd })
         if s.sub then win:Bind(sub, s.sub) end
         local obj = {}
         function obj:SetValue(x) v.Text = tostring(x) end
@@ -945,9 +1213,15 @@ function Tab:AddTable(o)
     if o.index then label(head, { Text = o.index, Font = F.Mono, TextSize = 11, TextColor3 = C.mono, TextXAlignment = Enum.TextXAlignment.Right, Position = UDim2.new(1, -54, 0, 7), Size = UDim2.fromOffset(40, 16) }) end
 
     local obj, n = {}, 1
-    function obj:AddRow(cells)
+    function obj:AddRow(cells, onClick)
         n += 1
         local r = frame(box, { Size = UDim2.new(1, 0, 0, 36), BackgroundTransparency = 1, LayoutOrder = n })
+        if onClick then
+            local hit = new("TextButton", { Text = "", AutoButtonColor = false, BackgroundColor3 = C.acc, BackgroundTransparency = 1, BorderSizePixel = 0, Size = UDim2.fromScale(1, 1), ZIndex = 2, Parent = r })
+            hit.MouseEnter:Connect(function() tween(hit, { BackgroundTransparency = 0.93 }) end)
+            hit.MouseLeave:Connect(function() tween(hit, { BackgroundTransparency = 1 }) end)
+            hit.MouseButton1Click:Connect(function() task.spawn(onClick) end)
+        end
         if n > 2 then line(r, 0) end
         for i, v in ipairs(cells) do
             local g = cellProps(i)
