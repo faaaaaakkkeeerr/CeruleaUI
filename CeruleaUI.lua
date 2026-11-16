@@ -16,7 +16,7 @@ local TweenService     = game:GetService("TweenService")
 local HttpService      = game:GetService("HttpService")
 local player           = Players.LocalPlayer
 
-local UI = { Version = "1.2.0" }
+local UI = { Version = "1.2.1" }
 
 --==================== Theme ====================
 UI.Theme = {
@@ -1109,21 +1109,33 @@ function Card:AddChart(o)
     end
     local bars = frame(plot, { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1 })
     local obj = {}
+    local pool, lastSig = {}, nil
     function obj:SetData(values)
-        bars:ClearAllChildren()
         local n = #values
-        if n < 1 then return end
+        if n < 1 then bars:ClearAllChildren() pool, lastSig = {}, nil return end
+        local sig = table.concat(values, ",")
+        if sig == lastSig then return end -- nothing changed: do not restart the animation
+        lastSig = sig
         local maxV = 1
         for _, v in ipairs(values) do maxV = math.max(maxV, v) end
+        if #pool ~= n then -- the number of bars changed: build them once
+            bars:ClearAllChildren()
+            pool = {}
+            for i = 1, n do
+                local bar = frame(bars, {
+                    AnchorPoint = Vector2.new(0, 1), Position = UDim2.new((i - 1) / n, 0, 1, 0), Size = UDim2.new(1 / n, -4, 0, 0),
+                })
+                corner(bar, 3)
+                new("UIGradient", { Rotation = 90, Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 0.7) }), Parent = bar })
+                pool[i] = bar
+            end
+        end
         for i, v in ipairs(values) do
             local last = (i == n)
             local ht = math.max(3 / h, (v / maxV) * (1 - 8 / h))
-            local bar = frame(bars, {
-                AnchorPoint = Vector2.new(0, 1), Position = UDim2.new((i - 1) / n, 0, 1, 0), Size = UDim2.new(1 / n, -4, 0, 0),
-                BackgroundColor3 = last and C.accT or C.acc, BackgroundTransparency = last and 0 or 0.3,
-            })
-            corner(bar, 3)
-            new("UIGradient", { Rotation = 90, Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 0.7) }), Parent = bar })
+            local bar = pool[i]
+            bar.BackgroundColor3 = last and C.accT or C.acc
+            bar.BackgroundTransparency = last and 0 or 0.3
             tween(bar, { Size = UDim2.new(1 / n, -4, ht, 0) }, 0.35)
         end
     end
