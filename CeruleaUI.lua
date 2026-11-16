@@ -16,7 +16,7 @@ local TweenService     = game:GetService("TweenService")
 local HttpService      = game:GetService("HttpService")
 local player           = Players.LocalPlayer
 
-local UI = { Version = "1.2.2" }
+local UI = { Version = "1.2.3" }
 
 --==================== Theme ====================
 UI.Theme = {
@@ -70,8 +70,28 @@ end
 local function line(parent, y)
     return frame(parent, { Size = UDim2.new(1, 0, 0, 1), Position = UDim2.fromOffset(0, y or 0), BackgroundColor3 = C.line, BackgroundTransparency = 0.94 })
 end
+local activeTweens = setmetatable({}, { __mode = "k" })
+local function untween(obj, only)
+    local list = activeTweens[obj]
+    if not list then return end
+    for i = #list, 1, -1 do
+        local e = list[i]
+        local hit = only == nil
+        if only then for k in pairs(only) do if e.props[k] ~= nil then hit = true break end end end
+        if hit then pcall(function() e.tw:Cancel() end) table.remove(list, i) end
+    end
+end
 local function tween(obj, props, t)
-    TweenService:Create(obj, TweenInfo.new(t or 0.15, Enum.EasingStyle.Quad), props):Play()
+    untween(obj, props) -- a running tween of the same property must not finish later with its old colour
+    local tw = TweenService:Create(obj, TweenInfo.new(t or 0.15, Enum.EasingStyle.Quad), props)
+    local list = activeTweens[obj]
+    if not list then list = {} activeTweens[obj] = list end
+    local entry = { tw = tw, props = props }
+    table.insert(list, entry)
+    tw.Completed:Connect(function()
+        for i, e in ipairs(list) do if e == entry then table.remove(list, i) break end end
+    end)
+    tw:Play()
 end
 local function pad(parent, t, b, l, r)
     return new("UIPadding", {
@@ -311,7 +331,7 @@ function UI.new(opts)
     local self = setmetatable({
         Prefs = prefs, Name = name, Flags = {}, Languages = opts.Languages or { "en" }, Translations = {},
         LanguageNames = opts.LanguageNames or {}, Tabs = {}, ToggleKey = opts.ToggleKey or Enum.KeyCode.RightShift,
-        Folder = folder, SoundsUrl = opts.SoundsUrl, SoundsOn = opts.SoundsUrl ~= nil, SoundVolume = 0.5, _sounds = {}, Private = {}, _overlays = {}, _bound = {}, _setters = {}, _conns = {}, _cleanup = {}, _keybinds = {},
+        Folder = folder, SoundsUrl = opts.SoundsUrl, SoundsOn = opts.SoundsUrl ~= nil, SoundVolume = 0.5, _sounds = {}, Private = {}, _overlays = {}, _repaints = {}, _bound = {}, _setters = {}, _conns = {}, _cleanup = {}, _keybinds = {},
         _langControls = {}, _nav = {}, _order = 0, _lastSection = nil, _onLanguage = opts.OnLanguage, _onAccent = opts.OnAccent,
     }, Window)
     self.Language = opts.Language or self.Languages[1]
@@ -589,6 +609,7 @@ function Window:SetAccent(color)
         fix(r)
         for _, d in ipairs(r:GetDescendants()) do fix(d) end
     end
+    for _, fn in ipairs(self._repaints) do pcall(fn) end -- toggles and checkboxes repaint from their own state, not by colour matching
     self:SetPref("Accent", { math.floor(newA.R * 255 + 0.5), math.floor(newA.G * 255 + 0.5), math.floor(newA.B * 255 + 0.5) })
     if self._onAccent then task.spawn(self._onAccent, newA, newT) end
 end
@@ -892,10 +913,12 @@ function Card:AddToggle(o)
             tween(track, g1)
             tween(knob, g2)
         else
+            untween(track) untween(knob)
             track.BackgroundColor3 = g1.BackgroundColor3
             knob.Position = g2.Position
         end
     end
+    table.insert(win._repaints, function() paint(false) end)
     local obj = {}
     function obj:Set(v, silent)
         state = v and true or false
@@ -1296,12 +1319,14 @@ function Tab:AddItemList(o)
         local tick = frame(cb, { Size = UDim2.fromOffset(6, 6), Position = UDim2.fromOffset(5, 5), BackgroundColor3 = Color3.new(1, 1, 1) })
         corner(tick, 3)
         local function paint()
+            untween(cb)
             local on = o.enabled(item)
             cb.BackgroundColor3 = on and C.acc or C.field
             tick.Visible = on
         end
         paint()
         paints[item] = paint
+        table.insert(win._repaints, function() if cb.Parent then paint() end end)
         cb.MouseButton1Click:Connect(function()
             o.setEnabled(item, not o.enabled(item))
             paint()
