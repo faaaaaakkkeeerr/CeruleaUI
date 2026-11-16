@@ -16,7 +16,7 @@ local TweenService     = game:GetService("TweenService")
 local HttpService      = game:GetService("HttpService")
 local player           = Players.LocalPlayer
 
-local UI = { Version = "1.2.1" }
+local UI = { Version = "1.2.2" }
 
 --==================== Theme ====================
 UI.Theme = {
@@ -565,6 +565,7 @@ function Window:SetAccent(color)
     local function same(a, b) return a == b end
     local function fix(o)
         pcall(function()
+            if o:GetAttribute("CeruleaFixed") then return end -- colour swatches keep their own colour
             if o:IsA("GuiObject") then
                 if same(o.BackgroundColor3, oldA) then o.BackgroundColor3 = newA elseif same(o.BackgroundColor3, oldT) then o.BackgroundColor3 = newT end
             end
@@ -1081,6 +1082,7 @@ function Card:AddSwatches(o)
             Text = "", AutoButtonColor = false, BorderSizePixel = 0, BackgroundColor3 = col, Size = UDim2.fromOffset(16, 16),
             AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -(#o.colors - i) * 23, 0.5, 0), Parent = r,
         })
+        b:SetAttribute("CeruleaFixed", true)
         corner(b, 8)
         marks[i] = new("UIStroke", { Color = Color3.new(1, 1, 1), Thickness = 2, Parent = b })
         b.MouseButton1Click:Connect(function() obj:Set(i) end)
